@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -21,6 +23,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.RadioButton;
@@ -32,8 +35,8 @@ import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -49,10 +52,6 @@ public class MainActivity extends Activity {
     private AppRemoteConfig remoteConfig;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
-    // ---- Remote (WordPress) app configuration ----
-    // NOTE: BuildConfig.VERSION_CODE is filled in automatically by Gradle from
-    // your app/build.gradle "versionCode" — keep that in sync with what you
-    // publish, since it's what the server compares against minimum_version_code.
     private AppConfig config = new AppConfig();
     private int accent = Color.rgb(37, 88, 221);
     private int background = Color.rgb(246, 248, 252);
@@ -62,7 +61,6 @@ public class MainActivity extends Activity {
     private LinearLayout bottomBar;
     private TextView topTitle;
     private ProgressBar loading;
-    private LinearLayout rootLayout;
 
     private long currentAttemptId = 0;
     private String currentAttemptToken = "";
@@ -88,13 +86,9 @@ public class MainActivity extends Activity {
         api = new ApiClient(site, token);
         remoteConfig = new AppRemoteConfig(site);
 
-        // Show a minimal splash while we fetch settings from WordPress, so the
-        // whole UI (colors, app name, maintenance/update gates) is built ONCE
-        // with real data instead of flashing hardcoded values first.
         showBootSplash();
-
         remoteConfig.load(json -> ui.post(() -> {
-            config = AppConfig.fromJson(json); // fail-open: defaults if json is empty/unreachable
+            config = AppConfig.fromJson(json);
             applyTheme();
             bootWithConfig();
         }));
@@ -153,7 +147,6 @@ public class MainActivity extends Activity {
         }));
     }
 
-    /** Full-screen gate used for disabled/maintenance/forced-update states. actionLabel is null -> only retry text shown if onAction != null means "retry", otherwise treated as "open link". */
     private void showBlockingScreen(String title, String message, Runnable onAction) {
         LinearLayout box = column();
         box.setGravity(Gravity.CENTER);
@@ -169,11 +162,11 @@ public class MainActivity extends Activity {
         if (onAction != null) {
             Button b = primaryButton(config.updateUrl != null && !config.updateUrl.isEmpty() && "بروزرسانی لازم است".equals(title) ? "دریافت نسخه جدید" : "تلاش دوباره");
             b.setOnClickListener(v -> onAction.run());
-            box.addView(b, new LinearLayout.LayoutParams(dp(220), dp(50)));
+            box.addView(b, new LinearLayout.LayoutParams(dp(220), dp(58)));
         }
         if (config.supportUrl != null && !config.supportUrl.trim().isEmpty()) {
             Button support = secondaryButton("تماس با پشتیبانی");
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(220), dp(46));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(220), dp(50));
             lp.topMargin = dp(10);
             support.setOnClickListener(v -> openExternal(config.supportUrl));
             box.addView(support, lp);
@@ -185,7 +178,6 @@ public class MainActivity extends Activity {
 
     private void buildShell() {
         LinearLayout root = new LinearLayout(this);
-        rootLayout = root;
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         root.setBackgroundColor(background);
@@ -194,6 +186,7 @@ public class MainActivity extends Activity {
         topBar.setGravity(Gravity.CENTER_VERTICAL);
         topBar.setPadding(dp(16), dp(10), dp(16), dp(10));
         topBar.setBackgroundColor(Color.WHITE);
+        topBar.setElevation(dp(2));
         topTitle = text(config.appName, 19, Color.rgb(15, 23, 42), true);
         topBar.addView(topTitle, new LinearLayout.LayoutParams(0, dp(46), 1));
         Button refresh = smallButton("↻");
@@ -206,13 +199,14 @@ public class MainActivity extends Activity {
 
         bottomBar = new LinearLayout(this);
         bottomBar.setGravity(Gravity.CENTER);
-        bottomBar.setPadding(dp(6), dp(6), dp(6), dp(8));
+        bottomBar.setPadding(dp(6), dp(8), dp(6), dp(10));
         bottomBar.setBackgroundColor(Color.WHITE);
-        addNav("خانه", this::showHome);
-        addNav("آزمون‌ها", this::showExams);
-        addNav("نتایج", this::showResults);
-        addNav("فایل‌ها", this::showFiles);
-        addNav("پروفایل", this::showProfile);
+        bottomBar.setElevation(dp(4));
+        addNav("🏠", "خانه", this::showHome);
+        addNav("📝", "آزمون‌ها", this::showExams);
+        addNav("📊", "نتایج", this::showResults);
+        addNav("📁", "فایل‌ها", this::showFiles);
+        addNav("👤", "پروفایل", this::showProfile);
         root.addView(bottomBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         loading = new ProgressBar(this);
@@ -225,10 +219,18 @@ public class MainActivity extends Activity {
         setContentView(overlay);
     }
 
-    private void addNav(String label, Runnable action) {
-        Button b = smallButton(label);
-        b.setOnClickListener(v -> action.run());
-        bottomBar.addView(b, new LinearLayout.LayoutParams(0, dp(46), 1));
+    private void addNav(String icon, String label, Runnable action) {
+        LinearLayout col = column();
+        col.setGravity(Gravity.CENTER);
+        TextView iconView = text(icon, 17, Color.rgb(51, 65, 85), false);
+        iconView.setGravity(Gravity.CENTER);
+        col.addView(iconView, matchWrap());
+        TextView labelView = text(label, 11, Color.rgb(51, 65, 85), false);
+        labelView.setGravity(Gravity.CENTER);
+        col.addView(labelView, matchWrap());
+        col.setOnClickListener(v -> action.run());
+        col.setPadding(dp(2), dp(4), dp(2), dp(2));
+        bottomBar.addView(col, new LinearLayout.LayoutParams(0, dp(52), 1));
     }
 
     private void refreshCurrent() {
@@ -262,30 +264,31 @@ public class MainActivity extends Activity {
         p.setPadding(dp(10), 0, dp(10), dp(18));
         box.addView(p, matchWrap());
 
-        EditText site = input("آدرس سایت (HTTPS)");
-        site.setText(api.getBaseUrl().isEmpty() ? getString(R.string.default_site_url) : api.getBaseUrl());
-        box.addView(site, matchWrapMargin(0, 8));
         EditText username = input("نام کاربری یا ایمیل");
         username.setSingleLine(true);
         box.addView(username, matchWrapMargin(0, 8));
         EditText password = input("رمز عبور");
         password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         password.setSingleLine(true);
-        box.addView(password, matchWrapMargin(0, 14));
+        box.addView(password, matchWrapMargin(0, 6));
+
+        TextView forgot = text("فراموشی رمز عبور؟", 13, accent, true);
+        forgot.setGravity(Gravity.LEFT);
+        forgot.setPadding(dp(4), dp(4), dp(4), dp(14));
+        forgot.setOnClickListener(v -> showForgotPasswordDialog(username.getText().toString().trim()));
+        box.addView(forgot, matchWrap());
+
         Button login = primaryButton("ورود به حساب");
-        box.addView(login, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)));
+        box.addView(login, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
         TextView help = text("اپ فقط به REST API وردپرس متصل می‌شود؛ هیچ صفحه‌ای از سایت داخل اپ باز نمی‌شود.", 12, Color.rgb(100, 116, 139), false);
         help.setGravity(Gravity.CENTER);
         help.setPadding(dp(8), dp(16), dp(8), 0);
         box.addView(help, matchWrap());
 
         login.setOnClickListener(v -> {
-            String normalized = ApiClient.normalize(site.getText().toString());
-            if (normalized.isEmpty()) { toast("آدرس سایت باید با https:// شروع شود."); return; }
             if (username.getText().toString().trim().isEmpty() || password.getText().toString().isEmpty()) {
                 toast("نام کاربری و رمز عبور را وارد کنید."); return;
             }
-            api.setBaseUrl(normalized);
             runApi(() -> {
                 JSONObject body = new JSONObject();
                 body.put("username", username.getText().toString().trim());
@@ -295,7 +298,7 @@ public class MainActivity extends Activity {
             }, json -> {
                 String token = json.optString("token", "");
                 if (token.isEmpty()) { toast("توکن ورود از سرور دریافت نشد."); return; }
-                prefs.edit().putString(PREF_SITE, normalized).putString(PREF_AUTH, token).apply();
+                prefs.edit().putString(PREF_SITE, api.getBaseUrl()).putString(PREF_AUTH, token).apply();
                 api.setAuthToken(token);
                 topBar.setVisibility(View.VISIBLE);
                 bottomBar.setVisibility(View.VISIBLE);
@@ -307,6 +310,31 @@ public class MainActivity extends Activity {
         setScreen(scroll);
     }
 
+    private void showForgotPasswordDialog(String prefill) {
+        EditText field = input("نام کاربری یا ایمیل");
+        if (prefill != null && !prefill.isEmpty()) field.setText(prefill);
+        field.setSingleLine(true);
+        LinearLayout wrap = column();
+        wrap.setPadding(dp(20), dp(10), dp(20), dp(0));
+        wrap.addView(field, matchWrap());
+
+        new AlertDialog.Builder(this)
+                .setTitle("بازیابی رمز عبور")
+                .setMessage("نام کاربری یا ایمیل حسابت را وارد کن؛ لینک تعیین رمز جدید برایت ایمیل می‌شود.")
+                .setView(wrap)
+                .setNegativeButton("انصراف", null)
+                .setPositiveButton("ارسال لینک", (d, w) -> {
+                    String loginValue = field.getText().toString().trim();
+                    if (loginValue.isEmpty()) { toast("نام کاربری یا ایمیل را وارد کن."); return; }
+                    runApi(() -> {
+                        JSONObject body = new JSONObject();
+                        body.put("login", loginValue);
+                        return api.post("/wp-json/physiquiz/v1/mobile/forgot-password", body);
+                    }, json -> showMessage("بازیابی رمز عبور", json.optString("message", "اگر این حساب وجود داشته باشد، ایمیل بازیابی ارسال شد.")));
+                })
+                .show();
+    }
+
     private void showHome() {
         prepareSection("خانه");
         runApi(() -> api.get("/wp-json/physiquiz/v1/mobile/home"), json -> {
@@ -314,7 +342,18 @@ public class MainActivity extends Activity {
             JSONObject user = json.optJSONObject("user");
             JSONObject stats = json.optJSONObject("stats");
             String name = user == null ? "دانش‌آموز" : user.optString("display_name", "دانش‌آموز");
-            page.addView(hero("سلام " + name, "داشبورد شخصی " + config.appName + "؛ بدون WebView و بدون وابستگی به برگه سایت."), matchWrapMargin(0, 14));
+
+            if (config.bannerUrl != null && !config.bannerUrl.trim().isEmpty()) {
+                page.addView(bannerImage(config.bannerUrl), matchWrapMargin(0, 14));
+            }
+
+            page.addView(hero("سلام " + name, "داشبورد شخصی " + config.appName + "؛ بدون WebView و بدون وابستگی به برگه سایت.", name), matchWrapMargin(0, 14));
+
+            if (config.cards != null && config.cards.length() > 0) {
+                for (int i = 0; i < config.cards.length(); i++) {
+                    addContentCard(page, config.cards.optJSONObject(i));
+                }
+            }
 
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
@@ -339,9 +378,44 @@ public class MainActivity extends Activity {
 
             Button files = secondaryButton("مشاهده فایل‌ها و منابع");
             files.setOnClickListener(v -> showFiles());
-            page.addView(files, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
+            page.addView(files, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)));
             setScrollable(page);
         });
+    }
+
+    /** Renders one WordPress-managed content card: image (optional) + title + short text, tappable if it has a link. */
+    private void addContentCard(LinearLayout page, JSONObject cardJson) {
+        if (cardJson == null) return;
+        String title = cardJson.optString("title", "");
+        String imageUrl = cardJson.optString("image", "");
+        String cardText = cardJson.optString("text", "");
+        String link = cardJson.optString("link", "");
+        if (title.isEmpty() && imageUrl.isEmpty() && cardText.isEmpty()) return;
+
+        LinearLayout card = card();
+        if (!imageUrl.isEmpty()) {
+            FrameLayout imgWrap = new FrameLayout(this);
+            GradientDrawable bg = new GradientDrawable();
+            bg.setColor(Color.rgb(230, 233, 240));
+            bg.setCornerRadius(dp(12));
+            imgWrap.setBackground(bg);
+            imgWrap.setClipToOutline(true);
+            ImageView iv = new ImageView(this);
+            iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            imgWrap.addView(iv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            loadImageInto(imageUrl, iv);
+            card.addView(imgWrap, matchWrapHeightMargin(110, 0, 10));
+        }
+        if (!title.isEmpty()) card.addView(text(title, 16, Color.rgb(15, 23, 42), true), matchWrap());
+        if (!cardText.isEmpty()) {
+            TextView t = bodyText(cardText);
+            t.setPadding(0, dp(4), 0, 0);
+            card.addView(t, matchWrap());
+        }
+        if (!link.isEmpty()) {
+            card.setOnClickListener(v -> openExternal(link));
+        }
+        page.addView(card, matchWrapMargin(0, 10));
     }
 
     private void showExams() {
@@ -371,7 +445,7 @@ public class MainActivity extends Activity {
         Button open = "ended".equals(state) ? secondaryButton("مشاهده جزئیات") : primaryButton("باز کردن آزمون");
         open.setEnabled(!"ended".equals(state));
         open.setOnClickListener(v -> showExamDetail(exam.optInt("id")));
-        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52));
         bp.topMargin = dp(12);
         card.addView(open, bp);
         page.addView(card, matchWrapMargin(0, 10));
@@ -408,7 +482,7 @@ public class MainActivity extends Activity {
                 if (!video.isEmpty()) {
                     Button vb = secondaryButton("باز کردن ویدیوی آماده‌سازی");
                     vb.setOnClickListener(v -> openExternal(video));
-                    page.addView(vb, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+                    page.addView(vb, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
                 }
                 if (warm.optBoolean("require_ack")) {
                     ack.setText(warm.optString("ack_text", "قوانین را خواندم و آماده‌ام."));
@@ -426,7 +500,7 @@ public class MainActivity extends Activity {
                 if (!ack.isChecked()) { toast("ابتدا تأیید مطالعه قوانین را فعال کنید."); return; }
                 startExam(examId, accessCode.getText().toString().trim());
             });
-            page.addView(start, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)));
+            page.addView(start, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
             setScrollable(page);
         });
     }
@@ -473,7 +547,7 @@ public class MainActivity extends Activity {
         if ("pdf".equals(currentExam.optString("mode")) && !currentExam.optString("pdf_url", "").isEmpty()) {
             Button pdf = secondaryButton("مشاهده فایل PDF سؤال‌ها");
             pdf.setOnClickListener(v -> openPdf(currentExam.optString("pdf_url")));
-            page.addView(pdf, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+            page.addView(pdf, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
         }
 
         LinearLayout qCard = card();
@@ -538,7 +612,7 @@ public class MainActivity extends Activity {
         }));
         nav.addView(prev, weighted());
         nav.addView(next, weightedMargin(8));
-        page.addView(nav, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
+        page.addView(nav, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
         setScrollable(page);
     }
 
@@ -607,7 +681,7 @@ public class MainActivity extends Activity {
         page.addView(infoLine("بی‌پاسخ", String.valueOf(result.optInt("unanswered_count"))), matchWrapMargin(0, 12));
         Button results = primaryButton("رفتن به کارنامه‌ها");
         results.setOnClickListener(v -> showResults());
-        page.addView(results, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
+        page.addView(results, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
         setScrollable(page);
     }
 
@@ -653,7 +727,7 @@ public class MainActivity extends Activity {
         card.addView(text(file.optString("type", "LINK"), 12, Color.rgb(100, 116, 139), false), matchWrapMargin(0, 8));
         Button open = secondaryButton("مشاهده / دانلود");
         open.setOnClickListener(v -> { if (url.toLowerCase(Locale.US).contains(".pdf")) openPdf(url); else openExternal(url); });
-        card.addView(open, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
+        card.addView(open, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
         page.addView(card, matchWrapMargin(0, 10));
     }
 
@@ -683,16 +757,16 @@ public class MainActivity extends Activity {
                 body.put("mobile", mobile.getText().toString().trim());
                 return api.post("/wp-json/physiquiz/v1/mobile/profile", body);
             }, out -> toast("پروفایل ذخیره شد.")));
-            page.addView(save, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
+            page.addView(save, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
             if (config.supportUrl != null && !config.supportUrl.trim().isEmpty()) {
                 Button support = secondaryButton("تماس با پشتیبانی");
-                LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50));
+                LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52));
                 slp.topMargin = dp(12);
                 support.setOnClickListener(v -> openExternal(config.supportUrl));
                 page.addView(support, slp);
             }
             Button logout = secondaryButton("خروج از حساب");
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)); lp.topMargin = dp(12);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)); lp.topMargin = dp(12);
             page.addView(logout, lp);
             logout.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("خروج از حساب").setMessage("از حساب " + config.appName + " خارج می‌شوی؟").setNegativeButton("خیر", null).setPositiveButton("خروج", (d, w) -> doLogout()).show());
             setScrollable(page);
@@ -725,7 +799,7 @@ public class MainActivity extends Activity {
         page.addView(empty(message), matchWrapMargin(0, 12));
         Button retry = secondaryButton("تلاش دوباره");
         retry.setOnClickListener(v -> refreshCurrent());
-        page.addView(retry, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
+        page.addView(retry, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
         setScrollable(page);
     }
 
@@ -846,25 +920,100 @@ public class MainActivity extends Activity {
         LinearLayout card = column();
         card.setPadding(dp(16), dp(15), dp(16), dp(15));
         card.setBackground(roundRect(Color.WHITE, 18, Color.rgb(226, 232, 240), 1));
+        card.setElevation(dp(2));
         return card;
     }
 
     private View statCard(String label, String value) {
         LinearLayout c = card();
-        c.addView(text(value, 22, accent, true), matchWrap());
+        c.addView(text(value, 23, accent, true), matchWrap());
         c.addView(text(label, 12, Color.rgb(100, 116, 139), false), matchWrapMargin(0, 3));
         return c;
     }
 
-    private View hero(String title, String subtitle) {
+    /** Rounded, cropped banner image loaded from the WordPress-configured URL. Hidden until (and unless) the image loads successfully. */
+    private View bannerImage(String url) {
+        FrameLayout wrap = new FrameLayout(this);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.rgb(228, 232, 240));
+        bg.setCornerRadius(dp(20));
+        wrap.setBackground(bg);
+        wrap.setClipToOutline(true);
+        wrap.setElevation(dp(3));
+        ImageView iv = new ImageView(this);
+        iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        wrap.addView(iv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        loadImageInto(url, iv);
+        FrameLayout outer = new FrameLayout(this);
+        outer.addView(wrap, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(150)));
+        return outer;
+    }
+
+    private void loadImageInto(String url, ImageView iv) {
+        io.execute(() -> {
+            try {
+                HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+                c.setConnectTimeout(8000);
+                c.setReadTimeout(8000);
+                Bitmap bmp = BitmapFactory.decodeStream(c.getInputStream());
+                c.disconnect();
+                if (bmp != null) ui.post(() -> iv.setImageBitmap(bmp));
+            } catch (Exception ignored) {
+                // Image failing to load should never block the app — just leave it blank.
+            }
+        });
+    }
+
+    /** Warm gradient hero card (accent → darker accent) instead of flat gray, optionally with a name-initial avatar badge. */
+    private View hero(String title, String subtitle, String avatarName) {
         LinearLayout h = column();
-        h.setPadding(dp(18), dp(18), dp(18), dp(18));
-        h.setBackground(roundRect(Color.rgb(31, 41, 55), 22, Color.TRANSPARENT, 0));
-        h.addView(text(title, 22, Color.WHITE, true), matchWrap());
-        TextView s = text(subtitle, 13, Color.rgb(226, 232, 240), false);
-        s.setPadding(0, dp(7), 0, 0);
+        h.setPadding(dp(20), dp(20), dp(20), dp(20));
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{accent, darken(accent, 0.55f)});
+        g.setCornerRadius(dp(24));
+        h.setBackground(g);
+        h.setElevation(dp(4));
+
+        if (avatarName != null && !avatarName.trim().isEmpty()) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.addView(avatarBadge(avatarName.trim().substring(0, 1).toUpperCase(Locale.getDefault())), new LinearLayout.LayoutParams(dp(44), dp(44)));
+            TextView t = text(title, 21, Color.WHITE, true);
+            LinearLayout.LayoutParams tlp = matchWrap();
+            tlp.leftMargin = dp(10);
+            row.addView(t, tlp);
+            h.addView(row, matchWrap());
+        } else {
+            h.addView(text(title, 22, Color.WHITE, true), matchWrap());
+        }
+
+        TextView s = text(subtitle, 13, Color.rgb(240, 244, 255), false);
+        s.setPadding(0, dp(8), 0, 0);
         h.addView(s, matchWrap());
         return h;
+    }
+
+    private View hero(String title, String subtitle) { return hero(title, subtitle, null); }
+
+    private View avatarBadge(String letter) {
+        TextView t = new TextView(this);
+        t.setText(letter);
+        t.setTextColor(accent);
+        t.setTextSize(18);
+        t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        t.setGravity(Gravity.CENTER);
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.OVAL);
+        d.setColor(Color.WHITE);
+        t.setBackground(d);
+        return t;
+    }
+
+    private int darken(int color, float factor) {
+        int r = Math.round(Color.red(color) * factor);
+        int g = Math.round(Color.green(color) * factor);
+        int b = Math.round(Color.blue(color) * factor);
+        return Color.rgb(Math.min(255, Math.max(0, r)), Math.min(255, Math.max(0, g)), Math.min(255, Math.max(0, b)));
     }
 
     private View sectionIntro(String title, String subtitle) {
@@ -939,10 +1088,11 @@ public class MainActivity extends Activity {
         Button b = new Button(this);
         b.setText(label);
         b.setAllCaps(false);
-        b.setTextSize(14);
+        b.setTextSize(15);
         b.setTextColor(Color.WHITE);
         b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        b.setBackground(roundRect(accent, 14, Color.TRANSPARENT, 0));
+        b.setBackground(roundRect(accent, 18, Color.TRANSPARENT, 0));
+        b.setElevation(dp(3));
         return b;
     }
 
@@ -950,9 +1100,9 @@ public class MainActivity extends Activity {
         Button b = new Button(this);
         b.setText(label);
         b.setAllCaps(false);
-        b.setTextSize(14);
+        b.setTextSize(15);
         b.setTextColor(accent);
-        b.setBackground(roundRect(Color.WHITE, 14, Color.rgb(191, 219, 254), 1));
+        b.setBackground(roundRect(Color.WHITE, 18, Color.rgb(191, 219, 254), 1));
         return b;
     }
 
@@ -977,6 +1127,7 @@ public class MainActivity extends Activity {
 
     private LinearLayout.LayoutParams matchWrap() { return new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); }
     private LinearLayout.LayoutParams matchWrapMargin(int top, int bottom) { LinearLayout.LayoutParams p = matchWrap(); p.topMargin = dp(top); p.bottomMargin = dp(bottom); return p; }
+    private LinearLayout.LayoutParams matchWrapHeightMargin(int heightDp, int top, int bottom) { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(heightDp)); p.topMargin = dp(top); p.bottomMargin = dp(bottom); return p; }
     private LinearLayout.LayoutParams weighted() { return new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1); }
     private LinearLayout.LayoutParams weightedMargin(int leftDp) { LinearLayout.LayoutParams p = weighted(); p.leftMargin = dp(leftDp); return p; }
 
