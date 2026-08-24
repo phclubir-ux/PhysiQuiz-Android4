@@ -1,5 +1,6 @@
 package com.physiquiz.student;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
@@ -13,6 +14,9 @@ public class AppConfig {
     public String appName = "فیزیکوییز";
     public String accentColor = "#2563eb";
     public String backgroundColor = "#f7f9fc";
+    public String bannerUrl = "";
+    /** Each element: {"title":"","image":"","text":"","link":""} — managed entirely from wp-admin, no app update needed to add/remove cards. */
+    public JSONArray cards = new JSONArray();
     public boolean maintenanceMode = false;
     public String maintenanceMessage = "سامانه برای مدت کوتاهی در حال بروزرسانی است. لطفاً کمی بعد دوباره تلاش کنید.";
     public String supportUrl = "";
@@ -24,17 +28,19 @@ public class AppConfig {
     public String updateMessage = "";
     public String updateUrl = "";
 
-    /** true only when the fetch actually returned data (used to decide fail-open vs apply). */
     public boolean loaded = false;
 
     public static AppConfig fromJson(JSONObject j) {
         AppConfig c = new AppConfig();
-        if (j == null || j.length() == 0) return c; // fail-open: keep defaults
+        if (j == null || j.length() == 0) return c;
         c.loaded = true;
         c.enabled = j.optBoolean("enabled", c.enabled);
         c.appName = j.optString("app_name", c.appName);
         c.accentColor = safeHex(j.optString("accent_color", c.accentColor), c.accentColor);
         c.backgroundColor = safeHex(j.optString("background_color", c.backgroundColor), c.backgroundColor);
+        c.bannerUrl = j.optString("banner_url", c.bannerUrl);
+        JSONArray cards = j.optJSONArray("cards");
+        c.cards = cards != null ? cards : new JSONArray();
         c.maintenanceMode = j.optBoolean("maintenance_mode", c.maintenanceMode);
         c.maintenanceMessage = j.optString("maintenance_message", c.maintenanceMessage);
         c.supportUrl = j.optString("support_url", c.supportUrl);
